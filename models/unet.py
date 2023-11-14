@@ -533,7 +533,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             model_3d_old = os.path.join(pretrained_model_path, 'diffusion_pytorch_model.safetensors')
             model_3d_old_state_dict = load_file(model_3d_old)
 
-        '''
+        
         for k, v in model_3d.state_dict().items():
             if 'spatial_conv' in k:
                 new_k = k.replace('spatial_conv.','')
@@ -543,7 +543,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                 new_k = k.replace('hidden_','')
                 if new_k in model_3d_old_state_dict:
                     model_3d_old_state_dict[k] = model_3d_old_state_dict.pop(new_k)
-        '''
+        
         model_3d.load_state_dict(model_3d_old_state_dict, strict=False)
 
         return model_3d
