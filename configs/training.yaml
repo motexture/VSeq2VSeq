@@ -1,8 +1,8 @@
 # Pretrained 2d diffusers model path.
-pretrained_2d_model_path: "C:\\Users\\motex\\stable-diffusion-xl-base-1.0"
+pretrained_2d_model_path: ""
 
 # Pretrained 3d diffusers model path.
-pretrained_3d_model_path: "C:\\Users\\motex\\vseq2vseq\\vseq2vseq"
+pretrained_3d_model_path: ""
 
 # Upgrade base modelscope model to new seq2seq model
 upgrade_model: True
