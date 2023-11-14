@@ -19,15 +19,15 @@ python inference.py \
     --image-guidance-scale 12 \
     --fps 16 \
     --sdp \
-    --num-frames 32 \
+    --num-frames 24 \
     --width 384 \
     --height 192 \
     --image-width 1152 \
     --image-height 640 \
     --num-steps 30 \
     --times 4 \
-    --min-conditioning-n-sample-frames 4 \
-    --max-conditioning-n-sample-frames 4 \
+    --min-conditioning-n-sample-frames 2 \
+    --max-conditioning-n-sample-frames 2 \
     --device cuda \
     --save-init \
     --include-model
