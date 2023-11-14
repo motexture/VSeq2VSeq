@@ -34,3 +34,6 @@ python inference.py \
 ```
 
 Increase --times parameter to create longer videos
+
+- [bfasenfest](https://github.com/bfasenfest) for his contribution to the creation of the model
+- [ExponentialML](https://github.com/ExponentialML/Text-To-Video-Finetuning/) for the original training and inference code
