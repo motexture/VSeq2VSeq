@@ -33,7 +33,8 @@ python inference.py \
     --include-model
 ```
 
-Increase --times parameter to create longer videos
+Increase --times parameter to create longer videos.<br>
+For resolutions higher than 384x192 you'll need to fine-tune the model.
 
 - [bfasenfest](https://github.com/bfasenfest) for his contribution to the creation of the model
 - [ExponentialML](https://github.com/ExponentialML/Text-To-Video-Finetuning/) for the original training and inference code
