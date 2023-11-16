@@ -385,7 +385,6 @@ def inference(
         for t in range(0, times):
             if t > 0 and t % prompts_interval == 0 and prompts is not None and read_prompts_from_file:
                 prompt = next(prompts)
-                print(prompt)
                 previous_prompt_embeds = None
             
             prompt_interpolation_alpha = (t % prompts_interval) if t > 0 else 0
