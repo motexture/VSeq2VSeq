@@ -24,7 +24,6 @@ from torch import Tensor
 from tqdm import trange
 from uuid import uuid4
 from diffusers.utils import PIL_INTERPOLATION
-from diffusers import StableDiffusionLatentUpscalePipeline
 from einops import rearrange
 
 def match_histograms(source, reference):
@@ -106,6 +105,14 @@ def image_to_tensor(image_path):
     image = Image.open(image_path).convert('RGB')
 
     return preprocess(image)
+
+def interpolate_prompts(embeds1, embeds2, alpha):
+    return (1 - alpha) * embeds1 + alpha * embeds2
+
+def read_prompts(file_path):
+    with open(file_path, 'r') as file:
+        prompts = [line.strip() for line in file.readlines()]
+    return prompts
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -240,6 +247,8 @@ def diffuse(
     guidance_scale: float,
     encode_to_latent: bool,
     num_frames: int,
+    prompt_interpolation_alpha: Optional[float] = None,
+    previous_prompt_embeds: Optional[torch.FloatTensor] = None,
     generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     conditioning_hidden_states: torch.Tensor = None,
     callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
@@ -257,6 +266,9 @@ def diffuse(
         num_images_per_prompt=1,
         do_classifier_free_guidance=do_classifier_free_guidance,
     )
+
+    if previous_prompt_embeds is not None:
+        prompt_embeds = interpolate_prompts(previous_prompt_embeds, prompt_embeds, prompt_interpolation_alpha)
 
     pipe.scheduler.set_timesteps(num_inference_steps, device=device)
     timesteps = pipe.scheduler.timesteps
@@ -306,20 +318,23 @@ def diffuse(
                 if callback is not None and i % callback_steps == 0:
                     callback(i, t, noisy_latents)
     
-    return noisy_latents
+    return noisy_latents, prompt_embeds
 
 @torch.inference_mode()
 def inference(
     model: str,
     prompt: str,
+    read_prompts_from_file: bool,
+    prompts_file: str,
+    prompts_interval: int,
     negative_prompt: Optional[str] = None,
     width: int = 384,
     height: int = 192,
     image_width: int = None,
     image_height: int = None,
     model_2d: str = None,
-    num_frames: int = 16,
-    vae_batch_size: int = 8,
+    num_frames: int = 24,
+    vae_batch_size: int = 24,
     num_steps: int = 30,
     guidance_scale: float = 20,
     image_guidance_scale: float = 12,
@@ -329,14 +344,18 @@ def inference(
     times: int = 4,
     seed: Optional[int] = None,
     conditioning_hidden_states: torch.Tensor = None,
-    min_conditioning_n_sample_frames: int = 4,
-    max_conditioning_n_sample_frames: int = 4,
+    min_conditioning_n_sample_frames: int = 2,
+    max_conditioning_n_sample_frames: int = 2,
     save_init: bool = False,
-    upscale: bool = False,
     output_dir: str = "output"
 ):
     if seed is not None:
         set_seed(seed)
+
+    if read_prompts_from_file:
+        prompts = read_prompts(prompts_file)
+        prompts = iter(prompts)
+        prompt = next(prompts)
 
     if conditioning_hidden_states is None:
         stable_diffusion_pipe = DiffusionPipeline.from_pretrained(model_2d, torch_dtype=torch.float16).to(device)
@@ -359,9 +378,16 @@ def inference(
 
         generator = torch.Generator().manual_seed(seed)
         
+        previous_prompt_embeds = None
         video_latents = []
         for t in range(0, times):
-            latents = diffuse(
+            if t > 0 and t % prompts_interval == 0:
+                prompt = next(prompts)
+                previous_prompt_embeds = None
+            
+            prompt_interpolation_alpha = (t % prompts_interval) if t > 0 else 0
+            
+            latents, prompt_embeds = diffuse(
                 pipe=pipe,
                 conditioning_hidden_states=conditioning_hidden_states,
                 prompt=prompt,
@@ -370,8 +396,11 @@ def inference(
                 num_inference_steps=num_steps,
                 guidance_scale=guidance_scale,
                 num_frames=num_frames,
+                prompt_interpolation_alpha=prompt_interpolation_alpha,
+                previous_prompt_embeds=previous_prompt_embeds if read_prompts_from_file else None,
                 generator=generator
             )
+            previous_prompt_embeds = prompt_embeds
             
             video_latents.append(latents)
 
@@ -382,33 +411,7 @@ def inference(
             
             conditioning_hidden_states = concatenated_latents[:, :, -random_slice:, :, :]  
 
-        if upscale:
-            upscaler = StableDiffusionLatentUpscalePipeline.from_pretrained("stabilityai/sd-x2-latent-upscaler", torch_dtype=torch.float16)
-            upscaler.to(device)
-            
-            concat_videos = torch.cat(video_latents, dim=0)
-
-            reshaped_videos = rearrange(concat_videos, 'b c f h w -> (b f) c h w')
-
-            upscaled_reshaped_videos = []
-            for i in range(0, reshaped_videos.shape[0], num_frames):
-                reshaped_frames = reshaped_videos[i:i+num_frames]
-                prompt_repeated = [prompt] * len(reshaped_frames)
-                upscaled_batch_frames = upscaler(
-                    prompt=prompt_repeated,
-                    image=reshaped_frames,
-                    num_inference_steps=num_steps,
-                    guidance_scale=0,
-                    generator=generator,
-                    output_type="latent"
-                ).images
-                upscaled_reshaped_videos.append(upscaled_batch_frames)
-
-            upscaled_reshaped_videos = torch.cat(upscaled_reshaped_videos, dim=0)
-
-            video_latents = rearrange(upscaled_reshaped_videos, '(b f) c (h h2) (w w2) -> b c f (h h2) (w w2)', b=concat_videos.shape[0], f=concat_videos.shape[2], h2=2, w2=2)
-        else:
-            video_latents = torch.cat(video_latents, dim=0)
+        video_latents = torch.cat(video_latents, dim=0)
 
         videos = decode(pipe, video_latents, vae_batch_size)
 
@@ -420,18 +423,21 @@ if __name__ == "__main__":
     decord.bridge.set_bridge("torch")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, required=True, help="HuggingFace repository or path to model checkpoint directory")
-    parser.add_argument("-p", "--prompt", type=str, required=True, help="Text prompt to condition on")
+    parser.add_argument("-m", "--model", type=str, default="motexture/vseq2vseq", help="HuggingFace repository or path to model checkpoint directory")
+    parser.add_argument("-MP", "--model-2d", type=str, default="stabilityai/stable-diffusion-xl-base-1.0", help="Path to the model for image generation (if init image is not provided)")
+    parser.add_argument("-p", "--prompt", type=str, default="A stormtrooper is surfing on the ocean", help="Text prompt to condition on")
+    parser.add_argument("-rp", "--read-prompts-from-file", default=False, action="store_true", help="File path to prompts file")
+    parser.add_argument("-pf", "--prompts-file", type=str, default=None, help="Path to text file with prompts")
+    parser.add_argument("-pi", "--prompts-interval", type=int, default=4, help="Interval for switching prompts when reading from file. Prompts will be interpolated linearly on this interval.")
     parser.add_argument("-o", "--output-dir", type=str, default="./output", help="Directory to save output video to")
     parser.add_argument("-n", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
     parser.add_argument("-FR", "--num-frames", type=int, default=24, help="Total number of frames to generate")
-    parser.add_argument("-CN", "--min-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
-    parser.add_argument("-CX", "--max-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
+    parser.add_argument("-CN", "--min-conditioning-n-sample-frames", type=int, default=2, help="Total number of frames to sample for conditioning after initial video")
+    parser.add_argument("-CX", "--max-conditioning-n-sample-frames", type=int, default=2, help="Total number of frames to sample for conditioning after initial video")
     parser.add_argument("-WI", "--width", type=int, default=384, help="Width of the video to generate (if init image is not provided)")
     parser.add_argument("-HI", "--height", type=int, default=192, help="Height of the video (if init image is not provided)")
     parser.add_argument("-IW", "--image-width", type=int, default=None, help="Width of the image to generate (if init image is not provided)")
     parser.add_argument("-IH", "--image-height", type=int, default=None, help="Height of the image (if init image is not provided)")
-    parser.add_argument("-MP", "--model-2d", type=str, default="stabilityai/stable-diffusion-2-1", help="Path to the model for image generation (if init image is not provided)")
     parser.add_argument("-i", "--init-image", type=str, default=None, help="Path to initial image to use")
     parser.add_argument("-VB", "--vae-batch-size", type=int, default=24, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).")
     parser.add_argument("-s", "--num-steps", type=int, default=30, help="Number of diffusion steps to run per frame.")
@@ -445,9 +451,13 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--times", type=int, default=4, help="How many times to continue to generate videos")
     parser.add_argument("-I", "--save-init", action="store_true", help="Save the init image to the output folder for reference")
     parser.add_argument("-N", "--include-model", action="store_true", help="Include the name of the model in the exported file")
-    parser.add_argument("-u", "--upscale", action="store_true", help="Use a latent upscaler")
 
     args = parser.parse_args()
+
+    if args.read_prompts_from_file:
+        prompt = read_prompts(args.prompts_file)[0]
+    else:
+        prompt = args.prompt
 
     conditioning_init_image = None
     if args.init_image is not None:
@@ -474,6 +484,9 @@ if __name__ == "__main__":
     videos = inference(
         model=args.model,
         prompt=args.prompt,
+        read_prompts_from_file=args.read_prompts_from_file,
+        prompts_file=args.prompts_file,
+        prompts_interval=args.prompts_interval,
         negative_prompt=args.negative_prompt,
         width=args.width,
         height=args.height,
@@ -494,7 +507,6 @@ if __name__ == "__main__":
         sdp=args.sdp,
         times=args.times,
         save_init=args.save_init,
-        upscale=args.upscale,
         output_dir=args.output_dir
     )
 
@@ -507,11 +519,11 @@ if __name__ == "__main__":
         video = enhance_contrast_clahe_4d(video)
 
         unique_id = str(uuid4())[:8]
-        out_file = f"{args.output_dir}/{args.prompt}-{unique_id}.mp4"
+        out_file = f"{args.output_dir}/{prompt}-{unique_id}.mp4"
         model_name = ""
         if args.include_model:
             model_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "-", os.path.basename(args.model))
-        encoded_out_file = f"{args.output_dir}/{args.prompt}-{model_name}-{unique_id}_encoded.mp4"
+        encoded_out_file = f"{args.output_dir}/{prompt}-{model_name}-{unique_id}_encoded.mp4"
 
         export_to_video(video, out_file, args.fps)
 
