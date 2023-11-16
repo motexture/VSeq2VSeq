@@ -356,6 +356,8 @@ def inference(
         prompts = read_prompts(prompts_file)
         prompts = iter(prompts)
         prompt = next(prompts)
+    else:
+        prompts = None
 
     if conditioning_hidden_states is None:
         stable_diffusion_pipe = DiffusionPipeline.from_pretrained(model_2d, torch_dtype=torch.float16).to(device)
@@ -381,8 +383,9 @@ def inference(
         previous_prompt_embeds = None
         video_latents = []
         for t in range(0, times):
-            if t > 0 and t % prompts_interval == 0:
+            if t > 0 and t % prompts_interval == 0 and prompts is not None and read_prompts_from_file:
                 prompt = next(prompts)
+                print(prompt)
                 previous_prompt_embeds = None
             
             prompt_interpolation_alpha = (t % prompts_interval) if t > 0 else 0
@@ -530,5 +533,5 @@ if __name__ == "__main__":
         try:
             encode_video(out_file, encoded_out_file, get_video_height(out_file))
             os.remove(out_file)
-        except:
+        except Exception as e:
             pass
