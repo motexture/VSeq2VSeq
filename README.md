@@ -69,10 +69,8 @@ Aragorn encounters an orc and starts to fight with it
 ```
 
 ## Additional info
-For best results --num-frames should be either 16, 24 or 32.<br>
-Motion slows down the higher --num-frames value is.<br>
-
-If you want to generate videos with a resolution higher than 384x192 you'll need to fine-tune the model with hd videos and images.
+For best results --num-frames should be 16, 24 or 32.<br>
+Higher values will result in slower motion.
 
 - [bfasenfest](https://github.com/bfasenfest) for his contribution to the creation of the model
 - [ExponentialML](https://github.com/ExponentialML/Text-To-Video-Finetuning/) for the original training and inference code
