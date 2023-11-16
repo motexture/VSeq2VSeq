@@ -35,7 +35,7 @@ python inference.py \
 ```
 Increase the --times parameter to create even longer videos.<br>
 
-Alternatively, you can read multiple prompts from a text file, where each line corresponds to a prompt that will be linearly interpolated with the next prompt every --prompts-interval steğs during the --times loop:
+Alternatively, you can read multiple prompts from a text file, where each line corresponds to a prompt that will be linearly interpolated with the next prompt every --prompts-interval steps during the --times loop:
 ```
 python inference.py \
     --read-prompts-from-file \
