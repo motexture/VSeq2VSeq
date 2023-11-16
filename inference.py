@@ -27,40 +27,49 @@ from diffusers.utils import PIL_INTERPOLATION
 from diffusers import StableDiffusionLatentUpscalePipeline
 from einops import rearrange
 
-def average_contrast(video):
-    num_frames = video.shape[0]
-    avg_contrast = 0
+def match_histograms(source, reference):
+    source = source.astype(np.uint8)
 
-    for f in range(num_frames):
-        frame = cv2.cvtColor(video[f], cv2.COLOR_BGR2GRAY)
-        avg_contrast += frame.std()
+    src_hist, _ = np.histogram(source.flatten(), 256, [0, 256])
+    src_cdf = np.cumsum(src_hist)
+    src_cdf_normalized = src_cdf / src_cdf.max()
 
-    avg_contrast /= num_frames
+    ref_hist, _ = np.histogram(reference.flatten(), 256, [0, 256])
+    ref_cdf = np.cumsum(ref_hist)
+    ref_cdf_normalized = ref_cdf / ref_cdf.max()
 
-    output_video = np.zeros_like(video)
-    for f in range(num_frames):
-        frame = video[f]
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        current_contrast = gray_frame.std()
-        
-        alpha = avg_contrast / (current_contrast + 1e-6)
-        adjusted_frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=0)
-        
-        output_video[f] = adjusted_frame
+    lookup_table = np.zeros(256, dtype=np.uint8)
+    for i in range(256):
+        idx = np.abs(src_cdf_normalized[i] - ref_cdf_normalized).argmin()
+        lookup_table[i] = idx
 
-    return output_video
+    matched_frame = lookup_table[source]
+    return matched_frame
 
 def enhance_contrast_clahe_4d(tensor, clip_limit=1.2, tile_grid_size=(1,1), gamma=0.98):
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     
     output = np.empty_like(tensor)
 
+    first_frame_matched = []
+
+    for c in range(tensor.shape[3]):
+        first_frame = tensor[0, :, :, c]
+        first_frame_enhanced = clahe.apply(first_frame)
+        first_frame_enhanced = np.power(first_frame_enhanced, gamma)
+        first_frame_enhanced = np.clip(first_frame_enhanced, 0, 255)
+        first_frame_matched.append(first_frame_enhanced)
+
     for f in range(tensor.shape[0]):
         for c in range(tensor.shape[3]):
-            enhanced_frame = clahe.apply(tensor[f, :, :, c])
+            frame = tensor[f, :, :, c]
+            enhanced_frame = clahe.apply(frame)
             enhanced_frame = np.power(enhanced_frame, gamma)
             enhanced_frame = np.clip(enhanced_frame, 0, 255)
-            output[f, :, :, c] = enhanced_frame
+
+            matched_frame = match_histograms(enhanced_frame, first_frame_matched[c])
+
+            output[f, :, :, c] = matched_frame
 
     return output
 
@@ -415,7 +424,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--prompt", type=str, required=True, help="Text prompt to condition on")
     parser.add_argument("-o", "--output-dir", type=str, default="./output", help="Directory to save output video to")
     parser.add_argument("-n", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
-    parser.add_argument("-FR", "--num-frames", type=int, default=16, help="Total number of frames to generate")
+    parser.add_argument("-FR", "--num-frames", type=int, default=24, help="Total number of frames to generate")
     parser.add_argument("-CN", "--min-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
     parser.add_argument("-CX", "--max-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
     parser.add_argument("-WI", "--width", type=int, default=384, help="Width of the video to generate (if init image is not provided)")
@@ -424,7 +433,7 @@ if __name__ == "__main__":
     parser.add_argument("-IH", "--image-height", type=int, default=None, help="Height of the image (if init image is not provided)")
     parser.add_argument("-MP", "--model-2d", type=str, default="stabilityai/stable-diffusion-2-1", help="Path to the model for image generation (if init image is not provided)")
     parser.add_argument("-i", "--init-image", type=str, default=None, help="Path to initial image to use")
-    parser.add_argument("-VB", "--vae-batch-size", type=int, default=16, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).")
+    parser.add_argument("-VB", "--vae-batch-size", type=int, default=24, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).")
     parser.add_argument("-s", "--num-steps", type=int, default=30, help="Number of diffusion steps to run per frame.")
     parser.add_argument("-g", "--guidance-scale", type=float, default=20, help="Scale for guidance loss (higher values = more guidance, but possibly more artifacts).")
     parser.add_argument("-IG", "--image-guidance-scale", type=float, default=12, help="Scale for guidance loss for 2d model (higher values = more guidance, but possibly more artifacts).")
@@ -495,7 +504,6 @@ if __name__ == "__main__":
         video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
         video = video.byte().cpu().numpy()
 
-        #video = average_contrast(video)
         video = enhance_contrast_clahe_4d(video)
 
         unique_id = str(uuid4())[:8]
