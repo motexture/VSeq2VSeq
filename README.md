@@ -70,7 +70,9 @@ Aragorn encounters an orc and starts to fight with it
 
 ## Additional info
 For best results --num-frames should be 16, 24 or 32.<br>
-Higher values will result in slower motion.
+Higher values will result in slower motion.<br>
+
+Base model: [damo-vilab/text-to-video-ms-1.7b](https://huggingface.co/damo-vilab/text-to-video-ms-1.7b)
 
 - [bfasenfest](https://github.com/bfasenfest) for his contribution to the creation of the model
 - [ExponentialML](https://github.com/ExponentialML/Text-To-Video-Finetuning/) for the original training and inference code
