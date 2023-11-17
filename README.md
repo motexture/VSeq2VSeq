@@ -74,5 +74,6 @@ Higher values will result in slower motion.<br>
 
 Base model: [damo-vilab/text-to-video-ms-1.7b](https://huggingface.co/damo-vilab/text-to-video-ms-1.7b)
 
+## Credits
 - [bfasenfest](https://github.com/bfasenfest) for his contribution to the creation of the model
 - [ExponentialML](https://github.com/ExponentialML/Text-To-Video-Finetuning/) for the original training and inference code
