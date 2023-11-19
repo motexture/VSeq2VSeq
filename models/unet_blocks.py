@@ -147,7 +147,7 @@ class UNetMidBlock3DCrossAttn(nn.Module):
             TemporalConvLayer(
                 in_channels,
                 in_channels,
-                dropout=0.1
+                dropout=dropout
             )
         ]
         attentions = []
@@ -202,7 +202,7 @@ class UNetMidBlock3DCrossAttn(nn.Module):
                 TemporalConvLayer(
                     in_channels,
                     in_channels,
-                    dropout=0.1
+                    dropout=dropout
                 )
             )
 
@@ -251,17 +251,13 @@ class UNetMidBlock3DCrossAttn(nn.Module):
                 
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(attn, return_dict=False), hidden_states, encoder_hidden_states,)[0]
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(temp_attn, return_dict=False), hidden_states, num_frames)[0] if num_frames > 1 else hidden_states
-
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(temp_cond_attn, return_dict=False), hidden_states, conditioning_hidden_states, num_frames)[0] if num_frames > 1 else hidden_states
-
                 hidden_states, conditioning_hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, conditioning_hidden_states, h_emb, c_emb, num_frames)
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(temp_conv), hidden_states, num_frames) if num_frames > 1 else hidden_states
             else:
                 hidden_states = attn(hidden_states, encoder_hidden_states=encoder_hidden_states,cross_attention_kwargs=cross_attention_kwargs,).sample
                 hidden_states = temp_attn(hidden_states, num_frames=num_frames).sample if num_frames > 1 else hidden_states
-
                 hidden_states = temp_cond_attn(hidden_states, conditioning_hidden_states, num_frames=num_frames).sample if num_frames > 1 else hidden_states
-
                 hidden_states, conditioning_hidden_states = resnet(hidden_states, conditioning_hidden_states, h_emb, c_emb, num_frames=num_frames)
                 hidden_states = temp_conv(hidden_states, num_frames=num_frames) if num_frames > 1 else hidden_states    
 
@@ -317,7 +313,7 @@ class CrossAttnDownBlock3D(nn.Module):
                 TemporalConvLayer(
                     out_channels,
                     out_channels,
-                    dropout=0.1
+                    dropout=dropout
                 )
             )
             attentions.append(
@@ -461,7 +457,7 @@ class DownBlock3D(nn.Module):
                 TemporalConvLayer(
                     out_channels,
                     out_channels,
-                    dropout=0.1
+                    dropout=dropout
                 )
             )
 
@@ -561,7 +557,7 @@ class CrossAttnUpBlock3D(nn.Module):
                 TemporalConvLayer(
                     out_channels,
                     out_channels,
-                    dropout=0.1
+                    dropout=dropout
                 )
             )
             attentions.append(
@@ -702,7 +698,7 @@ class UpBlock3D(nn.Module):
                 TemporalConvLayer(
                     out_channels,
                     out_channels,
-                    dropout=0.1
+                    dropout=dropout
                 )
             )
 
