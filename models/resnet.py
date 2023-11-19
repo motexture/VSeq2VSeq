@@ -56,7 +56,6 @@ class TemporalConvLayer(nn.Module):
         hidden_states = (
             hidden_states[None, :].reshape((-1, num_frames) + hidden_states.shape[1:]).permute(0, 2, 1, 3, 4)
         )
-
         identity = hidden_states
 
         hidden_states = self.conv1(hidden_states)
@@ -222,22 +221,23 @@ class ResnetBlock2D(nn.Module):
         num_frames_h = batch_frames_h // batch_h
         num_frames_c = batch_frames_c // batch_h
 
-        hidden_states = rearrange(hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_h)
-        conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_c)
-        
-        concat_hidden_states = torch.concat((conditioning_hidden_states, hidden_states), dim=1)
-        concat_hidden_states = concat_hidden_states[:, :num_frames_h, :]
+        if num_frames_h > 1:
+            hidden_states = rearrange(hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_h)
+            conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_c)
+            
+            concat_hidden_states = torch.concat((conditioning_hidden_states, hidden_states), dim=1)
+            concat_hidden_states = concat_hidden_states[:, :num_frames_h, :]
 
-        weights = torch.linspace(1, 0, num_frames_h, device=concat_hidden_states.device)
-        concat_hidden_states = concat_hidden_states * weights.view(1, -1, 1)
-        
-        concat_hidden_states = self.conditioning_norm3(concat_hidden_states)
-        concat_hidden_states = self.conditioning_proj(concat_hidden_states)
+            weights = torch.linspace(1, 0, num_frames_h, device=concat_hidden_states.device)
+            concat_hidden_states = concat_hidden_states * weights.view(1, -1, 1)
+            
+            concat_hidden_states = self.conditioning_norm3(concat_hidden_states)
+            concat_hidden_states = self.conditioning_proj(concat_hidden_states)
+            
+            hidden_states += concat_hidden_states
 
-        hidden_states += concat_hidden_states
-
-        hidden_states = rearrange(hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_h, h=height_h, w=width_h)
-        conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_c, h=height_c, w=width_c)
+            hidden_states = rearrange(hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_h, h=height_h, w=width_h)
+            conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_c, h=height_c, w=width_c)
 
         output_tensor = (input_tensor + hidden_states) / self.output_scale_factor
         output_conditioning_hidden_states = (conditioning_input_tensor + conditioning_hidden_states) / self.output_scale_factor
