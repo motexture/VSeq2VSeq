@@ -12,7 +12,6 @@ import cv2
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
-import torch.distributed as dist
 import subprocess
 import wandb
 import random
@@ -28,7 +27,6 @@ from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from einops import rearrange
 from utils.dataset import VideoFolderDataset
-from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import random_split
 from models.unet import UNet3DConditionModel
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -40,40 +38,49 @@ from diffusers.utils.import_utils import is_xformers_available
 from diffusers.models.attention import BasicTransformerBlock
 from diffusers.models.attention_processor import AttnProcessor2_0
 
-def average_contrast(video):
-    num_frames = video.shape[0]
-    avg_contrast = 0
+def match_histograms(source, reference):
+    source = source.astype(np.uint8)
 
-    for f in range(num_frames):
-        frame = cv2.cvtColor(video[f], cv2.COLOR_BGR2GRAY)
-        avg_contrast += frame.std()
+    src_hist, _ = np.histogram(source.flatten(), 256, [0, 256])
+    src_cdf = np.cumsum(src_hist)
+    src_cdf_normalized = src_cdf / src_cdf.max()
 
-    avg_contrast /= num_frames
+    ref_hist, _ = np.histogram(reference.flatten(), 256, [0, 256])
+    ref_cdf = np.cumsum(ref_hist)
+    ref_cdf_normalized = ref_cdf / ref_cdf.max()
 
-    output_video = np.zeros_like(video)
-    for f in range(num_frames):
-        frame = video[f]
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        current_contrast = gray_frame.std()
-        
-        alpha = avg_contrast / (current_contrast + 1e-6)
-        adjusted_frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=0)
-        
-        output_video[f] = adjusted_frame
+    lookup_table = np.zeros(256, dtype=np.uint8)
+    for i in range(256):
+        idx = np.abs(src_cdf_normalized[i] - ref_cdf_normalized).argmin()
+        lookup_table[i] = idx
 
-    return output_video
+    matched_frame = lookup_table[source]
+    return matched_frame
 
 def enhance_contrast_clahe_4d(tensor, clip_limit=1.2, tile_grid_size=(1,1), gamma=0.98):
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     
     output = np.empty_like(tensor)
 
+    first_frame_matched = []
+
+    for c in range(tensor.shape[3]):
+        first_frame = tensor[0, :, :, c]
+        first_frame_enhanced = clahe.apply(first_frame)
+        first_frame_enhanced = np.power(first_frame_enhanced, gamma)
+        first_frame_enhanced = np.clip(first_frame_enhanced, 0, 255)
+        first_frame_matched.append(first_frame_enhanced)
+
     for f in range(tensor.shape[0]):
         for c in range(tensor.shape[3]):
-            enhanced_frame = clahe.apply(tensor[f, :, :, c])
+            frame = tensor[f, :, :, c]
+            enhanced_frame = clahe.apply(frame)
             enhanced_frame = np.power(enhanced_frame, gamma)
             enhanced_frame = np.clip(enhanced_frame, 0, 255)
-            output[f, :, :, c] = enhanced_frame
+
+            matched_frame = match_histograms(enhanced_frame, first_frame_matched[c])
+
+            output[f, :, :, c] = matched_frame
 
     return output
 
@@ -574,7 +581,6 @@ def main(
                         video_frames = rearrange(video_frames, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
                         video_frames = video_frames.byte().cpu().numpy()
 
-                        #video_frames = average_contrast(video_frames)
                         video_frames = enhance_contrast_clahe_4d(video_frames)
 
                         export_to_video(video_frames, video_file, sample_data.fps)
