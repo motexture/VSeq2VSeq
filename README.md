@@ -14,7 +14,7 @@ To generate a long video from a single prompt:
 ```
 python inference.py \
     --prompt "A stormtrooper surfing on the ocean" \
-    --model "motexture/vseq2vseq" \
+    --model "motexture/VSeq2VSeq" \
     --model-2d "stabilityai/stable-diffusion-xl-base-1.0" \
     --guidance-scale 20 \
     --image-guidance-scale 12 \
@@ -41,7 +41,7 @@ python inference.py \
     --read-prompts-from-file \
     --prompts-file "prompts.txt" \
     --prompts-interval 4 \
-    --model "motexture/vseq2vseq" \
+    --model "motexture/VSeq2VSeq" \
     --model-2d "stabilityai/stable-diffusion-xl-base-1.0" \
     --guidance-scale 20 \
     --image-guidance-scale 12 \
