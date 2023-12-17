@@ -1,9 +1,9 @@
-# vseq2vseq
+# VSeq2VSeq
 Text to video diffusion model with variable length frame conditioning for infinite length video generation.
 
 ## Installation
 ```
-git clone https://github.com/motexture/vseq2vseq/
+git clone https://github.com/motexture/VSeq2VSeq/
 cd vseq2vseq
 pip install -r requirements.txt
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
