@@ -4,7 +4,7 @@ Text to video diffusion model with variable length frame conditioning for infini
 ## Installation
 ```
 git clone https://github.com/motexture/VSeq2VSeq/
-cd vseq2vseq
+cd VSeq2VSeq
 pip install -r requirements.txt
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
@@ -20,15 +20,15 @@ python inference.py \
     --image-guidance-scale 12 \
     --fps 16 \
     --sdp \
-    --num-frames 24 \
-    --width 384 \
+    --num-frames 16 \
+    --width 320 \
     --height 192 \
-    --image-width 1152 \
-    --image-height 640 \
-    --num-steps 30 \
+    --image-width 1280 \
+    --image-height 768 \
+    --num-steps 50 \
     --times 8 \
-    --min-conditioning-n-sample-frames 2 \
-    --max-conditioning-n-sample-frames 2 \
+    --min-conditioning-n-sample-frames 4 \
+    --max-conditioning-n-sample-frames 4 \
     --device cuda \
     --save-init \
     --include-model
@@ -47,15 +47,15 @@ python inference.py \
     --image-guidance-scale 12 \
     --fps 16 \
     --sdp \
-    --num-frames 24 \
-    --width 384 \
+    --num-frames 16 \
+    --width 320 \
     --height 192 \
-    --image-width 1152 \
-    --image-height 640 \
-    --num-steps 30 \
+    --image-width 1280 \
+    --image-height 768 \
+    --num-steps 50 \
     --times 16 \
-    --min-conditioning-n-sample-frames 2 \
-    --max-conditioning-n-sample-frames 2 \
+    --min-conditioning-n-sample-frames 4 \
+    --max-conditioning-n-sample-frames 4 \
     --device cuda \
     --save-init \
     --include-model
