@@ -518,7 +518,7 @@ if __name__ == "__main__":
         video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
         video = video.byte().cpu().numpy()
 
-        video = enhance_contrast_clahe_4d(video)
+        #video = enhance_contrast_clahe_4d(video)
 
         unique_id = str(uuid4())[:8]
         out_file = f"{args.output_dir}/{prompt}-{unique_id}.mp4"
