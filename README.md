@@ -20,7 +20,7 @@ python inference.py \
     --fps 16 \
     --sdp \
     --num-frames 16 \
-    --num-conditioning-frames 4 \
+    --num-conditioning-frames 2 \
     --width 448 \
     --height 256 \
     --image-width 1280 \
@@ -43,7 +43,7 @@ python inference.py \
     --fps 16 \
     --sdp \
     --num-frames 16 \
-    --num-conditioning-frames 4 \
+    --num-conditioning-frames 2 \
     --width 448 \
     --height 256 \
     --image-width 1280 \
