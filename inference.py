@@ -30,52 +30,14 @@ from diffusers import DDIMScheduler, DiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.models.attention import BasicTransformerBlock
 from diffusers.models.attention_processor import AttnProcessor2_0
+from skimage import exposure
 
-def match_histograms(source, reference):
-    source = source.astype(np.uint8)
+def match_histogram(frame, reference_image_path):
+    reference_image = cv2.imread(reference_image_path, cv2.IMREAD_COLOR)
+    reference_image = cv2.cvtColor(reference_image, cv2.COLOR_BGR2RGB)
 
-    src_hist, _ = np.histogram(source.flatten(), 256, [0, 256])
-    src_cdf = np.cumsum(src_hist)
-    src_cdf_normalized = src_cdf / src_cdf.max()
-
-    ref_hist, _ = np.histogram(reference.flatten(), 256, [0, 256])
-    ref_cdf = np.cumsum(ref_hist)
-    ref_cdf_normalized = ref_cdf / ref_cdf.max()
-
-    lookup_table = np.zeros(256, dtype=np.uint8)
-    for i in range(256):
-        idx = np.abs(src_cdf_normalized[i] - ref_cdf_normalized).argmin()
-        lookup_table[i] = idx
-
-    matched_frame = lookup_table[source]
-    return matched_frame
-
-def enhance_contrast_clahe_4d(tensor, clip_limit=1.2, tile_grid_size=(1,1), gamma=0.98):
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-    
-    output = np.empty_like(tensor)
-
-    first_frame_matched = []
-
-    for c in range(tensor.shape[3]):
-        first_frame = tensor[0, :, :, c]
-        first_frame_enhanced = clahe.apply(first_frame)
-        first_frame_enhanced = np.power(first_frame_enhanced, gamma)
-        first_frame_enhanced = np.clip(first_frame_enhanced, 0, 255)
-        first_frame_matched.append(first_frame_enhanced)
-
-    for f in range(tensor.shape[0]):
-        for c in range(tensor.shape[3]):
-            frame = tensor[f, :, :, c]
-            enhanced_frame = clahe.apply(frame)
-            enhanced_frame = np.power(enhanced_frame, gamma)
-            enhanced_frame = np.clip(enhanced_frame, 0, 255)
-
-            matched_frame = match_histograms(enhanced_frame, first_frame_matched[c])
-
-            output[f, :, :, c] = matched_frame
-
-    return output
+    matched = exposure.match_histograms(frame, reference_image, channel_axis=-1)
+    return matched
 
 def export_to_video(video_frames, output_video_path, fps):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -134,6 +96,8 @@ def save_image(tensor, filename):
 
     img = Image.fromarray(tensor)
     img.save(filename)
+
+    return filename
 
 def preprocess(image):
     if isinstance(image, torch.Tensor):
@@ -405,11 +369,12 @@ def inference(
     stable_diffusion_pipe = DiffusionPipeline.from_pretrained(image_diffusion_model).to(device)
     conditioning_hidden_states = stable_diffusion_pipe(prompt=prompt, negative_prompt=negative_prompt, width=image_width, height=image_height, guidance_scale=guidance_scale, output_type="pt").images[0]
     
-    unique_id = str(uuid4())[:8]
-    save_image(conditioning_hidden_states, f"{output_dir}/{prompt}-{unique_id}.png")
-
     conditioning_hidden_states = conditioning_hidden_states.unsqueeze(0)
     conditioning_hidden_states = F.interpolate(conditioning_hidden_states, size=(video_height, video_width), mode='bilinear', align_corners=False)
+
+    unique_id = str(uuid4())[:8]
+    reference_image_path = save_image(conditioning_hidden_states.squeeze(0), f"{output_dir}/{prompt}-{unique_id}.png")
+
     conditioning_hidden_states = conditioning_hidden_states.unsqueeze(2)
 
     del stable_diffusion_pipe
@@ -453,7 +418,7 @@ def inference(
 
         videos = decode(pipe, video_latents, vae_batch_size)
 
-    return torch.cat(torch.unbind(videos, dim=0), dim=1)
+    return torch.cat(torch.unbind(videos, dim=0), dim=1), reference_image_path
 
 if __name__ == "__main__":
     decord.bridge.set_bridge("torch")
@@ -473,8 +438,8 @@ if __name__ == "__main__":
     parser.add_argument("-FR", "--num-frames", type=int, default=16, help="Total number of frames to generate")
     parser.add_argument("-CF", "--num-conditioning-frames", type=int, default=4, help="Total number of frames to sample for conditioning")
 
-    parser.add_argument("-VW", "--video-width", type=int, default=320, help="Width of the video to generate")
-    parser.add_argument("-VH", "--video-height", type=int, default=192, help="Height of the video to generate")
+    parser.add_argument("-VW", "--video-width", type=int, default=448, help="Width of the video to generate")
+    parser.add_argument("-VH", "--video-height", type=int, default=256, help="Height of the video to generate")
     parser.add_argument("-IW", "--image-width", type=int, default=1280, help="Width of the image to generate")
     parser.add_argument("-IH", "--image-height", type=int, default=768, help="Height of the image")
 
@@ -485,7 +450,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=str, default="cuda", help="Device to run inference on (defaults to cuda).")
     parser.add_argument("-x", "--xformers", action="store_true", help="Use XFormers attnetion, a memory-efficient attention implementation")
     parser.add_argument("-s", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation")
-    parser.add_argument("-r", "--seed", type=int, default=None, help="Random seed to make generations reproducible")
+    parser.add_argument("-r", "--seed", type=int, default=42, help="Random seed to make generations reproducible")
     parser.add_argument("-t", "--times", type=int, default=4, help="How many times to continue to generate videos")
     parser.add_argument("-OD", "--output-dir", type=str, default="./output", help="Directory to save output video to")
 
@@ -504,7 +469,7 @@ if __name__ == "__main__":
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    videos = inference(
+    videos, reference_image_path = inference(
         video_diffusion_model=args.video_diffusion_model,
         image_diffusion_model=args.image_diffusion_model,
         prompt=args.prompt,
@@ -533,12 +498,17 @@ if __name__ == "__main__":
         video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
         video = video.byte().cpu().numpy()
 
+        matched_frames = []
+        for frame in video:
+            matched_frame = match_histogram(frame, reference_image_path)
+            matched_frames.append(matched_frame)
+
         unique_id = str(uuid4())[:8]
         out_file = f"{args.output_dir}/{prompt}-{unique_id}.mp4"
         model_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "-", os.path.basename(args.video_diffusion_model))
         encoded_out_file = f"{args.output_dir}/{prompt}-{model_name}-{unique_id}_encoded.mp4"
 
-        export_to_video(video, out_file, args.fps)
+        export_to_video(matched_frames, out_file, args.fps)
 
         try:
             encode_video(out_file, encoded_out_file, get_video_height(out_file))
