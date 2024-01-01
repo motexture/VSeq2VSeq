@@ -419,9 +419,9 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
 
                     return custom_forward
             
-            sample = torch.utils.checkpoint.checkpoint(create_custom_forward(self.transformer_in, return_dict=False), sample, num_frames)[0] if num_frames > 1 else sample
+            sample = torch.utils.checkpoint.checkpoint(create_custom_forward(self.transformer_in, return_dict=False), sample, num_frames)[0]
         else:
-            sample = self.transformer_in(sample, num_frames=num_frames).sample if num_frames > 1 else sample
+            sample = self.transformer_in(sample, num_frames=num_frames).sample
             
         # 3. down
         down_block_res_samples = (sample,)
@@ -533,7 +533,6 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             model_3d_old = os.path.join(pretrained_model_path, 'diffusion_pytorch_model.safetensors')
             model_3d_old_state_dict = load_file(model_3d_old)
 
-        
         for k, v in model_3d.state_dict().items():
             if 'spatial_conv' in k:
                 new_k = k.replace('spatial_conv.','')
