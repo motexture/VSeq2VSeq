@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import torch
-import torch.nn.functional as F
 
 from einops import rearrange
 from torch import nn
@@ -350,14 +349,12 @@ class TransformerTemporalConditioningModel(ModelMixin, ConfigMixin):
         num_frames: int = 16,
         return_dict: bool = True
     ):
-        batch_frames_h, channel_h, height_h, width_h = hidden_states.shape
-        batch_frames_c, channel_c, height_c, width_c = conditioning_hidden_states.shape
+        batch_frames_h, _, height_h, width_h = hidden_states.shape
+        batch_frames_c, _, _, _ = conditioning_hidden_states.shape
 
-        # Reshape hidden_states to match (batch, channel, num_frames, height, width)
         batch_h = batch_frames_h // num_frames
         hidden_states = rearrange(hidden_states, '(b f) c h w -> b c f h w', b=batch_h, f=num_frames)
 
-        # Calculate num_frames needed for conditioning_hidden_states reshape
         num_frames_c = batch_frames_c // batch_h
         conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b f) c h w -> b c f h w', b=batch_h, f=num_frames_c)
 
