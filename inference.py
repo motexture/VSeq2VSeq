@@ -485,7 +485,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=str, default="cuda", help="Device to run inference on (defaults to cuda).")
     parser.add_argument("-x", "--xformers", action="store_true", help="Use XFormers attnetion, a memory-efficient attention implementation")
     parser.add_argument("-s", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation")
-    parser.add_argument("-r", "--seed", type=int, default=42, help="Random seed to make generations reproducible")
+    parser.add_argument("-r", "--seed", type=int, default=None, help="Random seed to make generations reproducible")
     parser.add_argument("-t", "--times", type=int, default=4, help="How many times to continue to generate videos")
     parser.add_argument("-OD", "--output-dir", type=str, default="./output", help="Directory to save output video to")
 
