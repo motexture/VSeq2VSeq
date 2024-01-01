@@ -14,24 +14,20 @@ To generate a long video from a single prompt:
 ```
 python inference.py \
     --prompt "A stormtrooper surfing on the ocean" \
-    --model "motexture/VSeq2VSeq" \
-    --model-2d "stabilityai/stable-diffusion-xl-base-1.0" \
-    --guidance-scale 20 \
-    --image-guidance-scale 12 \
+    --video-diffusion-model "motexture/VSeq2VSeq" \
+    --image-diffusion-model "stabilityai/stable-diffusion-xl-base-1.0" \
+    --guidance-scale 12 \
     --fps 16 \
     --sdp \
     --num-frames 16 \
+    --num-conditioning-frames 4 \
     --width 320 \
     --height 192 \
     --image-width 1280 \
     --image-height 768 \
     --num-steps 50 \
     --times 8 \
-    --min-conditioning-n-sample-frames 4 \
-    --max-conditioning-n-sample-frames 4 \
     --device cuda \
-    --save-init \
-    --include-model
 ```
 Increase the --times parameter to create even longer videos.<br>
 
@@ -41,24 +37,20 @@ python inference.py \
     --read-prompts-from-file \
     --prompts-file "prompts.txt" \
     --prompts-interval 4 \
-    --model "motexture/VSeq2VSeq" \
-    --model-2d "stabilityai/stable-diffusion-xl-base-1.0" \
-    --guidance-scale 20 \
-    --image-guidance-scale 12 \
+    --video-diffusion-model "motexture/VSeq2VSeq" \
+    --image-diffusion-model "stabilityai/stable-diffusion-xl-base-1.0" \
+    --guidance-scale 12 \
     --fps 16 \
     --sdp \
     --num-frames 16 \
+    --num-conditioning-frames 4 \
     --width 320 \
     --height 192 \
     --image-width 1280 \
     --image-height 768 \
     --num-steps 50 \
     --times 16 \
-    --min-conditioning-n-sample-frames 4 \
-    --max-conditioning-n-sample-frames 4 \
     --device cuda \
-    --save-init \
-    --include-model
 ```
 Prompts file example:
 ```
@@ -67,10 +59,6 @@ Near the fireplace Aragorn is looking at his blade
 Aragorn starts to walk outside of his home
 Aragorn encounters an orc and starts to fight with it
 ```
-
-## Additional info
-For best results --num-frames should be 16, 24 or 32.<br>
-Higher values will result in slower motion.<br>
 
 Base model: [damo-vilab/text-to-video-ms-1.7b](https://huggingface.co/damo-vilab/text-to-video-ms-1.7b)
 
