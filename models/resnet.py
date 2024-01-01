@@ -149,9 +149,6 @@ class ResnetBlock2D(nn.Module):
 
         self.conv2 = Conditioner(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
-        self.conditioning_norm3 = torch.nn.Linear(out_channels, out_channels)
-        self.conditioning_proj = torch.nn.Linear(out_channels, out_channels)
-
         self.upsample = self.downsample = None
 
         if self.up:
@@ -165,7 +162,7 @@ class ResnetBlock2D(nn.Module):
                 in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=conv_shortcut_bias
             )
 
-    def forward(self, input_tensor, conditioning_input_tensor, h_emb, c_emb, num_frames=1):
+    def forward(self, input_tensor, conditioning_input_tensor, h_emb, c_emb):
         hidden_states = input_tensor
         conditioning_hidden_states = conditioning_input_tensor
 
@@ -212,32 +209,6 @@ class ResnetBlock2D(nn.Module):
 
         if self.conv_shortcut is not None:
             input_tensor, conditioning_input_tensor = self.conv_shortcut(input_tensor, conditioning_hidden_states=conditioning_input_tensor)
-
-        batch_frames_h, _, height_h, width_h = hidden_states.shape
-        batch_frames_c, _, height_c, width_c = conditioning_hidden_states.shape
-
-        batch_h = batch_frames_h // num_frames
-
-        num_frames_h = batch_frames_h // batch_h
-        num_frames_c = batch_frames_c // batch_h
-
-        if num_frames_h > 1:
-            hidden_states = rearrange(hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_h)
-            conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b f) c h w -> (b h w) f c', b=batch_h, f=num_frames_c)
-            
-            concat_hidden_states = torch.concat((conditioning_hidden_states, hidden_states), dim=1)
-            concat_hidden_states = concat_hidden_states[:, :num_frames_h, :]
-
-            weights = torch.linspace(1, 0, num_frames_h, device=concat_hidden_states.device)
-            concat_hidden_states = concat_hidden_states * weights.view(1, -1, 1)
-            
-            concat_hidden_states = self.conditioning_norm3(concat_hidden_states)
-            concat_hidden_states = self.conditioning_proj(concat_hidden_states)
-            
-            hidden_states += concat_hidden_states
-
-            hidden_states = rearrange(hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_h, h=height_h, w=width_h)
-            conditioning_hidden_states = rearrange(conditioning_hidden_states, '(b h w) f c -> (b f) c h w', b=batch_h, f=num_frames_c, h=height_c, w=width_c)
 
         output_tensor = (input_tensor + hidden_states) / self.output_scale_factor
         output_conditioning_hidden_states = (conditioning_input_tensor + conditioning_hidden_states) / self.output_scale_factor
