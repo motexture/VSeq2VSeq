@@ -11,6 +11,7 @@ import PIL
 import torch.nn.functional as F
 import numpy as np
 import cv2
+import decord
 
 from PIL import Image
 from diffusers import TextToVideoSDPipeline, DiffusionPipeline
@@ -455,8 +456,6 @@ def inference(
     return torch.cat(torch.unbind(videos, dim=0), dim=1)
 
 if __name__ == "__main__":
-    import decord
-
     decord.bridge.set_bridge("torch")
 
     parser = argparse.ArgumentParser()
@@ -467,7 +466,7 @@ if __name__ == "__main__":
     
     parser.add_argument("-RP", "--read-prompts-from-file", default=False, action="store_true", help="File path to prompts file")
     parser.add_argument("-PF", "--prompts-file", type=str, default=None, help="Path to text file with prompts")
-    parser.add_argument("-PI", "--prompts-interval", type=int, default=4, help="Interval for switching prompts when reading from file. Prompts will be interpolated linearly on this interval.")
+    parser.add_argument("-PI", "--prompts-interval", type=int, default=4, help="Interval for switching prompts when reading from file. Prompts will be interpolated linearly on this interval")
 
     parser.add_argument("-NP", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
     
@@ -479,14 +478,14 @@ if __name__ == "__main__":
     parser.add_argument("-IW", "--image-width", type=int, default=1280, help="Width of the image to generate")
     parser.add_argument("-IH", "--image-height", type=int, default=768, help="Height of the image")
 
-    parser.add_argument("-VB", "--vae-batch-size", type=int, default=32, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).")
-    parser.add_argument("-NS", "--num-steps", type=int, default=50, help="Number of diffusion steps to run per frame.")
-    parser.add_argument("-GS", "--guidance-scale", type=float, default=12, help="Scale for guidance loss (higher values = more guidance, but possibly more artifacts).")
+    parser.add_argument("-VB", "--vae-batch-size", type=int, default=32, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage)")
+    parser.add_argument("-NS", "--num-steps", type=int, default=50, help="Number of diffusion steps to run per frame")
+    parser.add_argument("-GS", "--guidance-scale", type=float, default=12, help="Scale for guidance loss")
     parser.add_argument("-f", "--fps", type=int, default=16, help="FPS of output video")
     parser.add_argument("-d", "--device", type=str, default="cuda", help="Device to run inference on (defaults to cuda).")
-    parser.add_argument("-x", "--xformers", action="store_true", help="Use XFormers attnetion, a memory-efficient attention implementation (requires `pip install xformers`).")
-    parser.add_argument("-s", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation.")
-    parser.add_argument("-r", "--seed", type=int, default=42, help="Random seed to make generations reproducible.")
+    parser.add_argument("-x", "--xformers", action="store_true", help="Use XFormers attnetion, a memory-efficient attention implementation")
+    parser.add_argument("-s", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation")
+    parser.add_argument("-r", "--seed", type=int, default=42, help="Random seed to make generations reproducible")
     parser.add_argument("-t", "--times", type=int, default=4, help="How many times to continue to generate videos")
     parser.add_argument("-OD", "--output-dir", type=str, default="./output", help="Directory to save output video to")
 
