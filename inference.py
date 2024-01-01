@@ -1,5 +1,3 @@
-# Adapted from https://github.com/ExponentialML/Text-To-Video-Finetuning/blob/main/inference.py
-
 import argparse
 import warnings
 import torch
@@ -15,8 +13,7 @@ import numpy as np
 import cv2
 
 from PIL import Image
-from train import export_to_video, load_primary_models, handle_memory_attention
-from diffusers import TextToVideoSDPipeline, DiffusionPipeline, DPMSolverMultistepScheduler, UniPCMultistepScheduler
+from diffusers import TextToVideoSDPipeline, DiffusionPipeline
 from einops import rearrange
 from typing import Any, Callable, Dict, List, Optional, Union
 from einops import rearrange
@@ -25,6 +22,13 @@ from tqdm import trange
 from uuid import uuid4
 from diffusers.utils import PIL_INTERPOLATION
 from einops import rearrange
+from models.unet import UNet3DConditionModel
+from transformers import CLIPTextModel, CLIPTokenizer
+from diffusers.models import AutoencoderKL
+from diffusers import DDIMScheduler, DiffusionPipeline
+from diffusers.utils.import_utils import is_xformers_available
+from diffusers.models.attention import BasicTransformerBlock
+from diffusers.models.attention_processor import AttnProcessor2_0
 
 def match_histograms(source, reference):
     source = source.astype(np.uint8)
@@ -72,6 +76,56 @@ def enhance_contrast_clahe_4d(tensor, clip_limit=1.2, tile_grid_size=(1,1), gamm
 
     return output
 
+def export_to_video(video_frames, output_video_path, fps):
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    h, w, _ = video_frames[0].shape
+    video_writer = cv2.VideoWriter(output_video_path, fourcc, fps=fps, frameSize=(w, h))
+    for i in range(len(video_frames)):
+        img = cv2.cvtColor(video_frames[i], cv2.COLOR_RGB2BGR)
+        video_writer.write(img)
+
+def load_primary_models(pretrained_model_path):
+    noise_scheduler = DDIMScheduler.from_pretrained(pretrained_model_path, subfolder="scheduler")
+    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
+    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
+    unet = UNet3DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet")
+
+    return noise_scheduler, tokenizer, text_encoder, vae, unet
+
+def set_processors(attentions):
+    for attn in attentions: attn.set_processor(AttnProcessor2_0()) 
+
+def set_torch_2_attn(unet):
+    optim_count = 0
+    
+    for name, module in unet.named_modules():
+        if isinstance(module, torch.nn.ModuleList):
+            for m in module:
+                if isinstance(m, BasicTransformerBlock):
+                    set_processors([m.attn1, m.attn2])
+                    optim_count += 1
+
+    print(f"{optim_count} Attention layers using Scaled Dot Product Attention.")
+
+def handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet): 
+    try:
+        is_torch_2 = hasattr(F, 'scaled_dot_product_attention')
+        enable_torch_2 = is_torch_2 and enable_torch_2_attn
+        
+        if enable_xformers_memory_efficient_attention and not enable_torch_2:
+            if is_xformers_available():
+                from xformers.ops import MemoryEfficientAttentionFlashAttentionOp
+                unet.enable_xformers_memory_efficient_attention(attention_op=MemoryEfficientAttentionFlashAttentionOp)
+            else:
+                raise ValueError("xformers is not available. Make sure it is installed correctly")
+        
+        if enable_torch_2:
+            set_torch_2_attn(unet)
+            
+    except:
+        print("Could not enable memory efficient attention for xformers or Torch 2.0.")
+
 def save_image(tensor, filename):
     tensor = tensor.cpu().numpy()
     tensor = tensor.transpose((1, 2, 0))
@@ -88,7 +142,7 @@ def preprocess(image):
 
     if isinstance(image[0], PIL.Image.Image):
         w, h = image[0].size
-        w, h = (x - x % 8 for x in (w, h))  # resize to integer multiple of 8
+        w, h = (x - x % 8 for x in (w, h))
 
         image = [np.array(i.resize((w, h), resample=PIL_INTERPOLATION["lanczos"]))[None, :] for i in image]
         image = np.concatenate(image, axis=0)
@@ -99,12 +153,6 @@ def preprocess(image):
     elif isinstance(image[0], torch.Tensor):
         image = torch.cat(image, dim=0)
     return image
-
-def image_to_tensor(image_path):
-    # Open image file
-    image = Image.open(image_path).convert('RGB')
-
-    return preprocess(image)
 
 def interpolate_prompts(embeds1, embeds2, alpha):
     return (1 - alpha) * embeds1 + alpha * embeds2
@@ -168,12 +216,10 @@ def initialize_pipeline(
         pretrained_model_name_or_path=model,
         scheduler=scheduler,
         tokenizer=tokenizer,
-        text_encoder=text_encoder.to(device=device, dtype=torch.half),
-        vae=vae.to(device=device, dtype=torch.half),
-        unet=unet.to(device=device, dtype=torch.half),
+        text_encoder=text_encoder.to(device=device),
+        vae=vae.to(device=device),
+        unet=unet.to(device=device),
     )
-    #pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-    #pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
 
     vae.enable_slicing()
 
@@ -193,7 +239,7 @@ def prepare_input_latents(
     if init_video is None:
         scale = pipe.vae_scale_factor
         shape = (batch_size, pipe.unet.config.in_channels, num_frames, height // scale, width // scale)
-        latents = torch.randn(shape, dtype=torch.half)
+        latents = torch.randn(shape)
 
     else:
         latents = encode(pipe, init_video, vae_batch_size)
@@ -210,7 +256,7 @@ def encode(pipe: TextToVideoSDPipeline, pixels: Tensor, batch_size: int = 8):
     for idx in trange(
         0, pixels.shape[0], batch_size, desc="Encoding to latents...", unit_scale=batch_size, unit="frame"
     ):
-        pixels_batch = pixels[idx : idx + batch_size].to(pipe.device, dtype=torch.half)
+        pixels_batch = pixels[idx : idx + batch_size].to(pipe.device)
         latents_batch = pipe.vae.encode(pixels_batch).latent_dist.sample()
         latents_batch = latents_batch.mul(pipe.vae.config.scaling_factor).cpu()
         latents.append(latents_batch)
@@ -228,7 +274,7 @@ def decode(pipe: TextToVideoSDPipeline, latents: Tensor, batch_size: int = 8):
     for idx in trange(
         0, latents.shape[0], batch_size, desc="Decoding to pixels...", unit_scale=batch_size, unit="frame"
     ):
-        latents_batch = latents[idx : idx + batch_size].to(pipe.device, dtype=torch.half)
+        latents_batch = latents[idx : idx + batch_size].to(pipe.device)
         latents_batch = latents_batch.div(pipe.vae.config.scaling_factor)
         pixels_batch = pipe.vae.decode(latents_batch).sample.cpu()
         pixels.append(pixels_batch)
@@ -278,7 +324,7 @@ def diffuse(
 
     shape = (1, 4, num_frames, conditioning_hidden_states.shape[3], conditioning_hidden_states.shape[4])
 
-    noisy_latents = torch.randn(shape, dtype=torch.half)
+    noisy_latents = torch.randn(shape)
     noisy_latents = noisy_latents.to(device)
 
     extra_step_kwargs = pipe.prepare_extra_step_kwargs(generator, eta)
@@ -322,31 +368,27 @@ def diffuse(
 
 @torch.inference_mode()
 def inference(
-    model: str,
+    video_diffusion_model: str,
+    image_diffusion_model: str,
     prompt: str,
     read_prompts_from_file: bool,
     prompts_file: str,
     prompts_interval: int,
     negative_prompt: Optional[str] = None,
-    width: int = 320,
-    height: int = 192,
+    video_width: int = 320,
+    video_height: int = 192,
     image_width: int = None,
     image_height: int = None,
-    model_2d: str = None,
     num_frames: int = 16,
+    num_conditioning_frames: int = 4,
     vae_batch_size: int = 32,
     num_steps: int = 50,
     guidance_scale: float = 20,
-    image_guidance_scale: float = 12,
     device: str = "cuda",
     xformers: bool = False,
     sdp: bool = False,
     times: int = 4,
     seed: Optional[int] = None,
-    conditioning_hidden_states: torch.Tensor = None,
-    min_conditioning_n_sample_frames: int = 4,
-    max_conditioning_n_sample_frames: int = 4,
-    save_init: bool = False,
     output_dir: str = "output"
 ):
     if seed is not None:
@@ -359,24 +401,21 @@ def inference(
     else:
         prompts = None
 
-    if conditioning_hidden_states is None:
-        stable_diffusion_pipe = DiffusionPipeline.from_pretrained(model_2d, torch_dtype=torch.float16).to(device)
-        conditioning_hidden_states = stable_diffusion_pipe(prompt=prompt, negative_prompt=negative_prompt, width=image_width, height=image_height, guidance_scale=image_guidance_scale, output_type="pt").images[0]
-        
-        if (save_init):
-            os.makedirs(output_dir, exist_ok=True)
-            unique_id = str(uuid4())[:8]
-            save_image(conditioning_hidden_states, f"{output_dir}/{prompt}-{unique_id}.png")
+    stable_diffusion_pipe = DiffusionPipeline.from_pretrained(image_diffusion_model).to(device)
+    conditioning_hidden_states = stable_diffusion_pipe(prompt=prompt, negative_prompt=negative_prompt, width=image_width, height=image_height, guidance_scale=guidance_scale, output_type="pt").images[0]
+    
+    unique_id = str(uuid4())[:8]
+    save_image(conditioning_hidden_states, f"{output_dir}/{prompt}-{unique_id}.png")
 
-        conditioning_hidden_states = conditioning_hidden_states.unsqueeze(0)
-        conditioning_hidden_states = F.interpolate(conditioning_hidden_states, size=(height, width), mode='bilinear', align_corners=False)
-        conditioning_hidden_states = conditioning_hidden_states.unsqueeze(2)
+    conditioning_hidden_states = conditioning_hidden_states.unsqueeze(0)
+    conditioning_hidden_states = F.interpolate(conditioning_hidden_states, size=(video_height, video_width), mode='bilinear', align_corners=False)
+    conditioning_hidden_states = conditioning_hidden_states.unsqueeze(2)
 
-        del stable_diffusion_pipe
-        torch.cuda.empty_cache()
+    del stable_diffusion_pipe
+    torch.cuda.empty_cache()
 
-    with torch.autocast(device, dtype=torch.half):
-        pipe = initialize_pipeline(model, device, xformers, sdp)
+    with torch.autocast(device):
+        pipe = initialize_pipeline(video_diffusion_model, device, xformers, sdp)
 
         generator = torch.Generator().manual_seed(seed)
         
@@ -407,11 +446,7 @@ def inference(
             video_latents.append(latents)
 
             concatenated_latents = torch.cat(video_latents, dim=2)
-            
-            random_slice = random.randint(min_conditioning_n_sample_frames, max_conditioning_n_sample_frames)
-            random_slice = random_slice if random_slice < concatenated_latents.shape[2] else 1
-            
-            conditioning_hidden_states = concatenated_latents[:, :, -random_slice:, :, :]  
+            conditioning_hidden_states = concatenated_latents[:, :, -num_conditioning_frames:, :, :]  
 
         video_latents = torch.cat(video_latents, dim=0)
 
@@ -425,34 +460,35 @@ if __name__ == "__main__":
     decord.bridge.set_bridge("torch")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, default="motexture/VSeq2VSeq", help="HuggingFace repository or path to model checkpoint directory")
-    parser.add_argument("-MP", "--model-2d", type=str, default="stabilityai/stable-diffusion-xl-base-1.0", help="Path to the model for image generation (if init image is not provided)")
+    parser.add_argument("-VD", "--video-diffusion-model", type=str, default="motexture/VSeq2VSeq", help="Path to video diffusion model")
+    parser.add_argument("-ID", "--image-diffusion-model", type=str, default="stabilityai/stable-diffusion-xl-base-1.0", help="Path to image diffusion model")
+
     parser.add_argument("-p", "--prompt", type=str, default="A stormtrooper is surfing on the ocean", help="Text prompt to condition on")
-    parser.add_argument("-rp", "--read-prompts-from-file", default=False, action="store_true", help="File path to prompts file")
-    parser.add_argument("-pf", "--prompts-file", type=str, default=None, help="Path to text file with prompts")
-    parser.add_argument("-pi", "--prompts-interval", type=int, default=4, help="Interval for switching prompts when reading from file. Prompts will be interpolated linearly on this interval.")
-    parser.add_argument("-o", "--output-dir", type=str, default="./output", help="Directory to save output video to")
-    parser.add_argument("-n", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
+    
+    parser.add_argument("-RP", "--read-prompts-from-file", default=False, action="store_true", help="File path to prompts file")
+    parser.add_argument("-PF", "--prompts-file", type=str, default=None, help="Path to text file with prompts")
+    parser.add_argument("-PI", "--prompts-interval", type=int, default=4, help="Interval for switching prompts when reading from file. Prompts will be interpolated linearly on this interval.")
+
+    parser.add_argument("-NP", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
+    
     parser.add_argument("-FR", "--num-frames", type=int, default=16, help="Total number of frames to generate")
-    parser.add_argument("-CN", "--min-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
-    parser.add_argument("-CX", "--max-conditioning-n-sample-frames", type=int, default=4, help="Total number of frames to sample for conditioning after initial video")
-    parser.add_argument("-WI", "--width", type=int, default=320, help="Width of the video to generate (if init image is not provided)")
-    parser.add_argument("-HI", "--height", type=int, default=192, help="Height of the video (if init image is not provided)")
-    parser.add_argument("-IW", "--image-width", type=int, default=1280, help="Width of the image to generate (if init image is not provided)")
-    parser.add_argument("-IH", "--image-height", type=int, default=768, help="Height of the image (if init image is not provided)")
-    parser.add_argument("-i", "--init-image", type=str, default=None, help="Path to initial image to use")
+    parser.add_argument("-CF", "--num-conditioning-frames", type=int, default=4, help="Total number of frames to sample for conditioning")
+
+    parser.add_argument("-VW", "--video-width", type=int, default=320, help="Width of the video to generate")
+    parser.add_argument("-VH", "--video-height", type=int, default=192, help="Height of the video to generate")
+    parser.add_argument("-IW", "--image-width", type=int, default=1280, help="Width of the image to generate")
+    parser.add_argument("-IH", "--image-height", type=int, default=768, help="Height of the image")
+
     parser.add_argument("-VB", "--vae-batch-size", type=int, default=32, help="Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).")
-    parser.add_argument("-s", "--num-steps", type=int, default=30, help="Number of diffusion steps to run per frame.")
-    parser.add_argument("-g", "--guidance-scale", type=float, default=20, help="Scale for guidance loss (higher values = more guidance, but possibly more artifacts).")
-    parser.add_argument("-IG", "--image-guidance-scale", type=float, default=12, help="Scale for guidance loss for 2d model (higher values = more guidance, but possibly more artifacts).")
+    parser.add_argument("-NS", "--num-steps", type=int, default=50, help="Number of diffusion steps to run per frame.")
+    parser.add_argument("-GS", "--guidance-scale", type=float, default=12, help="Scale for guidance loss (higher values = more guidance, but possibly more artifacts).")
     parser.add_argument("-f", "--fps", type=int, default=16, help="FPS of output video")
     parser.add_argument("-d", "--device", type=str, default="cuda", help="Device to run inference on (defaults to cuda).")
     parser.add_argument("-x", "--xformers", action="store_true", help="Use XFormers attnetion, a memory-efficient attention implementation (requires `pip install xformers`).")
-    parser.add_argument("-S", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation.")
-    parser.add_argument("-r", "--seed", type=int, default=None, help="Random seed to make generations reproducible.")
+    parser.add_argument("-s", "--sdp", action="store_true", help="Use SDP attention, PyTorch's built-in memory-efficient attention implementation.")
+    parser.add_argument("-r", "--seed", type=int, default=42, help="Random seed to make generations reproducible.")
     parser.add_argument("-t", "--times", type=int, default=4, help="How many times to continue to generate videos")
-    parser.add_argument("-I", "--save-init", action="store_true", help="Save the init image to the output folder for reference")
-    parser.add_argument("-N", "--include-model", action="store_true", help="Include the name of the model in the exported file")
+    parser.add_argument("-OD", "--output-dir", type=str, default="./output", help="Directory to save output video to")
 
     args = parser.parse_args()
 
@@ -461,70 +497,46 @@ if __name__ == "__main__":
     else:
         prompt = args.prompt
 
-    conditioning_init_image = None
-    if args.init_image is not None:
-        conditioning_init_image = image_to_tensor(args.init_image)
-
-    image_width = None
-    if args.image_width is None:
-        image_width = args.width
-    else:
-        image_width = args.image_width
-
-    image_height = None
-    if args.image_height is None:
-        image_height = args.height
-    else:
-        image_height = args.image_height
-
     seed = 0
     if args.seed is None:
         seed = random.randint(0, 9999999)
     else:
         seed = args.seed
 
+    os.makedirs(args.output_dir, exist_ok=True)
+
     videos = inference(
-        model=args.model,
+        video_diffusion_model=args.video_diffusion_model,
+        image_diffusion_model=args.image_diffusion_model,
         prompt=args.prompt,
         read_prompts_from_file=args.read_prompts_from_file,
         prompts_file=args.prompts_file,
         prompts_interval=args.prompts_interval,
         negative_prompt=args.negative_prompt,
-        width=args.width,
-        height=args.height,
-        image_width=image_width,
-        image_height=image_height,
-        model_2d=args.model_2d,
+        video_width=args.video_width,
+        video_height=args.video_height,
+        image_width=args.image_width,
+        image_height=args.image_height,
         num_frames=args.num_frames,
-        conditioning_hidden_states=conditioning_init_image,
-        min_conditioning_n_sample_frames=args.min_conditioning_n_sample_frames,
-        max_conditioning_n_sample_frames=args.max_conditioning_n_sample_frames,
+        num_conditioning_frames=args.num_conditioning_frames,
         vae_batch_size=args.vae_batch_size,
         num_steps=args.num_steps,
         guidance_scale=args.guidance_scale,
-        image_guidance_scale=args.image_guidance_scale,
         device=args.device,
         seed=seed,
         xformers=args.xformers,
         sdp=args.sdp,
         times=args.times,
-        save_init=args.save_init,
         output_dir=args.output_dir
     )
-
-    os.makedirs(args.output_dir, exist_ok=True)
 
     for video in [videos]:
         video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
         video = video.byte().cpu().numpy()
 
-        #video = enhance_contrast_clahe_4d(video)
-
         unique_id = str(uuid4())[:8]
         out_file = f"{args.output_dir}/{prompt}-{unique_id}.mp4"
-        model_name = ""
-        if args.include_model:
-            model_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "-", os.path.basename(args.model))
+        model_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "-", os.path.basename(args.video_diffusion_model))
         encoded_out_file = f"{args.output_dir}/{prompt}-{model_name}-{unique_id}_encoded.mp4"
 
         export_to_video(video, out_file, args.fps)
