@@ -19,10 +19,10 @@ python inference.py \
     --guidance-scale 12 \
     --fps 16 \
     --sdp \
-    --num-frames 16 \
+    --num-frames 32 \
     --num-conditioning-frames 4 \
-    --width 320 \
-    --height 192 \
+    --width 448 \
+    --height 256 \
     --image-width 1280 \
     --image-height 768 \
     --num-steps 50 \
@@ -42,10 +42,10 @@ python inference.py \
     --guidance-scale 12 \
     --fps 16 \
     --sdp \
-    --num-frames 16 \
+    --num-frames 32 \
     --num-conditioning-frames 4 \
-    --width 320 \
-    --height 192 \
+    --width 448 \
+    --height 256 \
     --image-width 1280 \
     --image-height 768 \
     --num-steps 50 \
